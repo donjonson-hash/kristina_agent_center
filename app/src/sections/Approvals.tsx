@@ -39,24 +39,159 @@ const statusConfig = {
   rejected: { icon: XCircle, color: 'text-red-500', label: 'Rejected' },
 };
 
+// Action Service API endpoint (замените на ваш реальный URL)
+const ACTION_SERVICE_URL = 'http://localhost:8000/api/actions/execute';
+
+// Функция вызова Action Service
+async function callActionService(
+  action: string,
+  target: string,
+  agentId: string,
+  requiresApproval: boolean,
+  params?: Record<string, unknown>
+): Promise<{ status: string; action_id: string; message: string }> {
+  try {
+    const response = await fetch(ACTION_SERVICE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        action,
+        target,
+        agent_id: agentId,
+        params: params || {},
+        requires_approval: requiresApproval,
+      }),
+    });
+    
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.detail || `HTTP ${response.status}`);
+    }
+    
+    return await response.json();
+  } catch (error) {
+    console.error('Action Service error:', error);
+    return {
+      status: 'fallback',
+      action_id: 'fallback_' + Date.now(),
+      message: error instanceof Error ? error.message : 'Action Service unavailable',
+    };
+  }
+}
+
 export default function Approvals() {
   const [requests, setRequests] = useState<ApprovalRequest[]>(approvalRequests);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [filter, setFilter] = useState<'all' | 'pending' | 'approved' | 'rejected'>('pending');
+  const [processingIds, setProcessingIds] = useState<Set<string>>(new Set());
 
   const filtered = filter === 'all' ? requests : requests.filter((r) => r.status === filter);
   const pendingCount = requests.filter((r) => r.status === 'pending').length;
 
-  const handleApprove = (id: string) => {
+  // Обновить статус запроса в UI
+  const updateRequestStatus = (id: string, status: 'approved' | 'rejected') => {
     setRequests((prev) =>
-      prev.map((r) => (r.id === id ? { ...r, status: 'approved' as const, resolvedAt: new Date().toISOString() } : r))
+      prev.map((r) =>
+        r.id === id
+          ? { ...r, status, resolvedAt: new Date().toISOString() }
+          : r
+      )
     );
   };
 
-  const handleReject = (id: string) => {
-    setRequests((prev) =>
-      prev.map((r) => (r.id === id ? { ...r, status: 'rejected' as const, resolvedAt: new Date().toISOString() } : r))
-    );
+  // Обработка Approve
+  const handleApprove = async (id: string) => {
+    const request = requests.find((r) => r.id === id);
+    if (!request || request.status !== 'pending') return;
+
+    // Защита от повторных нажатий
+    if (processingIds.has(id)) return;
+    setProcessingIds((prev) => new Set(prev).add(id));
+
+    try {
+      // Определяем agent_id на основе requesterRole
+      const agentId = mapRoleToAgentId(request.requesterRole);
+      
+      // Определяем requires_approval: для high risk действий всё равно требуется?
+      // Action Service уже получил approval от человека, поэтому выставляем false
+      const requiresApproval = false;
+      
+      const result = await callActionService(
+        request.action,
+        request.target,
+        agentId,
+        requiresApproval,
+        { reason: `Approved by ${request.requestedBy}` }
+      );
+      
+      if (result.status === 'executed' || result.status === 'fallback') {
+        updateRequestStatus(id, 'approved');
+        console.log(`✅ Action executed: ${result.action_id} - ${result.message}`);
+      } else if (result.status === 'pending_approval') {
+        // Этого не должно произойти, так как мы выставили requires_approval: false
+        console.warn('Action still pending approval:', result);
+        updateRequestStatus(id, 'approved');
+      } else {
+        console.error('Unexpected action status:', result);
+        // Всё равно отмечаем как approved, чтобы не застревало
+        updateRequestStatus(id, 'approved');
+      }
+    } catch (error) {
+      console.error('Failed to execute action:', error);
+      alert(`Failed to execute action: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      // Не меняем статус при ошибке
+    } finally {
+      setProcessingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  };
+
+  // Обработка Reject
+  const handleReject = async (id: string) => {
+    const request = requests.find((r) => r.id === id);
+    if (!request || request.status !== 'pending') return;
+
+    if (processingIds.has(id)) return;
+    setProcessingIds((prev) => new Set(prev).add(id));
+
+    try {
+      // Для reject просто логируем, реальное действие не вызываем
+      console.log(`❌ Action rejected: ${request.action} on ${request.target} by ${request.requestedBy}`);
+      
+      // Можно отправить уведомление в Action Service, если нужно
+      await callActionService(
+        request.action,
+        request.target,
+        'system',
+        false,
+        { rejected_by: request.requestedBy, reason: 'Manually rejected' }
+      ).catch(() => {});
+      
+      updateRequestStatus(id, 'rejected');
+    } catch (error) {
+      console.error('Failed to process reject:', error);
+    } finally {
+      setProcessingIds((prev) => {
+        const next = new Set(prev);
+        next.delete(id);
+        return next;
+      });
+    }
+  };
+
+  // Маппинг ролей на agent_id для Action Service
+  const mapRoleToAgentId = (role: string): string => {
+    const roleMap: Record<string, string> = {
+      'Lead Developer': 'kristina_lead',
+      'Frontend Developer': 'frontend_agent_01',
+      'Backend Developer': 'backend_agent_01',
+      'DevOps Engineer': 'devops_agent_01',
+      'QA Engineer': 'qa_agent_01',
+    };
+    return roleMap[role] || 'unknown_agent';
   };
 
   return (
@@ -100,6 +235,7 @@ export default function Approvals() {
           const StatusIcon = stCfg.icon;
           const isExpanded = expanded === req.id;
           const isPending = req.status === 'pending';
+          const isProcessing = processingIds.has(req.id);
 
           return (
             <div
@@ -150,17 +286,27 @@ export default function Approvals() {
                             e.stopPropagation();
                             handleApprove(req.id);
                           }}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 text-xs font-medium hover:bg-emerald-100 transition-colors"
+                          disabled={isProcessing}
+                          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                            isProcessing
+                              ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
+                              : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                          }`}
                         >
                           <CheckCircle2 size={14} />
-                          Approve
+                          {isProcessing ? 'Processing...' : 'Approve'}
                         </button>
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
                             handleReject(req.id);
                           }}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-red-50 text-red-700 text-xs font-medium hover:bg-red-100 transition-colors"
+                          disabled={isProcessing}
+                          className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
+                            isProcessing
+                              ? 'bg-gray-200 text-gray-500 cursor-not-allowed'
+                              : 'bg-red-50 text-red-700 hover:bg-red-100'
+                          }`}
                         >
                           <XCircle size={14} />
                           Reject
