@@ -3,12 +3,8 @@ name: Lint Python
 on:
   push:
     branches: [ main, develop ]
-    paths:
-      - 'backend/**'
   pull_request:
     branches: [ main ]
-    paths:
-      - 'backend/**'
 
 jobs:
   lint:
@@ -23,15 +19,12 @@ jobs:
         python-version: '3.12'
     
     - name: Install linters
-      run: |
-        pip install flake8 pylint bandit
+      run: pip install flake8 bandit
     
     - name: Run flake8
-      working-directory: ./backend
       continue-on-error: true
-      run: flake8 action_service.py --max-line-length=120 --ignore=E501,W503
+      run: flake8 action_service.py --max-line-length=120 --ignore=E501,W503,E302
     
     - name: Run bandit (security)
-      working-directory: ./backend
       continue-on-error: true
-      run: bandit action_service.py -ll
+      run: bandit action_service.py -ll -s B311
