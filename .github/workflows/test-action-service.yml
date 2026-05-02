@@ -1,0 +1,52 @@
+name: Test Action Service
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'backend/**'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'backend/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    
+    - name: Install dependencies
+      working-directory: ./backend
+      run: |
+        python -m pip install --upgrade pip
+        pip install pytest httpx
+        pip install -r requirements.txt || true
+    
+    - name: Run Action Service tests
+      working-directory: ./backend
+      run: |
+        # Test that action_service.py syntax is valid
+        python -m py_compile action_service.py
+        
+        # Start service in background
+        python action_service.py &
+        sleep 3
+        
+        # Test health endpoint
+        curl -f http://localhost:8000/api/actions/health
+        
+        # Test execute endpoint
+        curl -X POST http://localhost:8000/api/actions/execute \
+          -H "Content-Type: application/json" \
+          -d '{"action":"test","target":"Test","agent_id":"devops","params":{},"requires_approval":false}'
+        
+        # Stop service
+        kill %1
+      shell: bash

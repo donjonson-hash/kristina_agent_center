@@ -1,0 +1,37 @@
+name: Lint Python
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'backend/**'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'backend/**'
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    
+    - name: Install linters
+      run: |
+        pip install flake8 pylint bandit
+    
+    - name: Run flake8
+      working-directory: ./backend
+      continue-on-error: true
+      run: flake8 action_service.py --max-line-length=120 --ignore=E501,W503
+    
+    - name: Run bandit (security)
+      working-directory: ./backend
+      continue-on-error: true
+      run: bandit action_service.py -ll

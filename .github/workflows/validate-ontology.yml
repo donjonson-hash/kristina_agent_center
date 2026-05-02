@@ -1,0 +1,40 @@
+name: Validate Ontology
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'ontology.yaml'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'ontology.yaml'
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+    
+    - name: Install yaml validator
+      run: pip install pyyaml
+    
+    - name: Validate ontology.yaml
+      run: |
+        python -c "
+        import yaml
+        try:
+            with open('ontology.yaml', 'r') as f:
+                data = yaml.safe_load(f)
+                print('✅ Ontology is valid YAML')
+                print(f'📊 Entities: {len(data.get(\"ontology\", {}).get(\"entities\", []))}')
+        except Exception as e:
+            print(f'❌ Error: {e}')
+            exit(1)
+        "
