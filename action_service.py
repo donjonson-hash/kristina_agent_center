@@ -1,134 +1,97 @@
-from fastapi import FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
-from typing import Optional, Dict, Any
-import hashlib
-import json
-import time
-import asyncio
-import websockets
 import httpx
+from typing import Optional, Dict, Any, List
+import time
+import uuid
+import json
+import logging
 
-app = FastAPI(title="Kristina Action Service")
+# ... (остальные импорты и код)
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:3000", "http://localhost:5173"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-OPENCLAW_URL = "ws://localhost:18789"
+# --- Новая интеграция с OpenClaw ---
+
+OPENCLAW_GATEWAY_URL = "http://localhost:18789"
+# Ваш API-ключ из переменной окружения
 OPENCLAW_API_KEY = "sk-295ca99ac1e74ad7a8db90d4e84a1145"
+# Или можно получить из переменных окружения, если вы их используете
+# OPENCLAW_API_KEY = os.getenv("OPENCLAW_API_KEY")
 
-class ActionRequest(BaseModel):
-    action: str
-    target: str
-    agent_id: str
-    params: Optional[Dict[str, Any]] = {}
-    requires_approval: bool = False
+# Клиент для HTTP-запросов
+client = httpx.Client(timeout=30.0)
 
-class ActionResponse(BaseModel):
-    status: str
-    action_id: str
-    message: str
+async def execute_action_with_openclaw(action: str, target: str, params: dict) -> str:
+    """
+    Направляет запрос Action Service в OpenClaw для выполнения.
+    Использует HTTP API `/tools/invoke`.
+    """
+    # Убедимся, что API-ключ задан
+    if not OPENCLAW_API_KEY:
+        return "❌ OpenClaw API key not configured. Cannot execute action."
 
-audit_log = []
-
-def log_action(action_req: ActionRequest, status: str, result: str = ""):
-    entry = {
-        "action_id": hashlib.md5(f"{time.time()}{action_req.action}".encode()).hexdigest()[:8],
-        "agent_id": action_req.agent_id,
-        "action": action_req.action,
-        "target": action_req.target,
-        "params": action_req.params,
-        "timestamp": time.time(),
-        "status": status,
-        "result": result,
+    # Создаём заголовки с авторизацией
+    headers = {
+        "Authorization": f"Bearer {OPENCLAW_API_KEY}",
+        "Content-Type": "application/json",
     }
-    audit_log.append(entry)
-    print(f"[AUDIT] {entry}")
-    return entry["action_id"]
 
-async def execute_with_openclaw(action: str, target: str, params: dict) -> str:
-    """Выполняет действие через HTTP API OpenClaw"""
-    
-    async with httpx.AsyncClient() as client:
+    # Формируем тело запроса для OpenClaw
+    # Поле "tool" определяет, какое действие выполнить
+    openclaw_tool = "agent.message"
+    openclaw_args = {
+        "message": f"Execute the following action: {action} on {target} with parameters {params}. Provide a concise result.",
+        "session_key": f"action-{target}-{int(time.time())}"
+    }
+
+    # --- Пример маппинга ваших действий на инструменты OpenClaw ---
+    if action == "deploy":
+        openclaw_tool = "agent.deploy"
+        openclaw_args = {"environment": target, "params": params}
+    elif action == "browser.navigate":
+        openclaw_tool = "browser.navigate"
+        openclaw_args = {"url": params.get("url")}
+    # Добавьте сюда другие типы действий по аналогии
+
+    payload = {
+        "tool": openclaw_tool,
+        "args": openclaw_args,
+        "sessionKey": f"action-session-{target}"
+    }
+
+    logger.info(f"Invoking OpenClaw tool '{openclaw_tool}' with payload: {payload}")
+    logger.info(f"Using API Key: {OPENCLAW_API_KEY[:10]}...")
+
+    # Путь к API инструментов OpenClaw
+    invoke_url = f"{OPENCLAW_GATEWAY_URL}/tools/invoke"
+
+    try:
+        # Отправляем POST-запрос к OpenClaw
+        response = client.post(invoke_url, json=payload, headers=headers)
+        response.raise_for_status() # Вызовет исключение для кодов 4xx/5xx
+
+        result = response.json()
+        logger.info(f"OpenClaw response: {result}")
+
+        # Извлекаем результат в зависимости от ответа OpenClaw
+        if "result" in result:
+            return f"✅ OpenClaw executed {action}: {str(result['result'])}"
+        elif "message" in result:
+            return f"✅ OpenClaw executed {action}: {result['message']}"
+        else:
+            return f"✅ OpenClaw executed {action}. Response: {result}"
+
+    except httpx.HTTPStatusError as e:
+        error_detail = f"HTTP {e.response.status_code}"
         try:
-            # Пробуем разные эндпоинты
-            endpoints = [
-                ("POST", "/api/execute", {"action": action, "target": target, **params}),
-                ("POST", "/command", {"cmd": action, "args": params}),
-                ("GET", f"/api/action/{action}", {"target": target}),
-            ]
-            
-            for method, endpoint, data in endpoints:
-                url = f"http://localhost:18789{endpoint}"
-                if method == "POST":
-                    resp = await client.post(url, json=data, timeout=5)
-                else:
-                    resp = await client.get(url, params=data, timeout=5)
-                
-                if resp.status_code == 200:
-                    return f"✅ OpenClaw HTTP: {resp.json()}"
-            
-            return "⚠️ No working HTTP endpoint found"
-            
-        except Exception as e:
-            return f"⚠️ OpenClaw HTTP error: {str(e)}"
-
-async def execute_with_openclaw(action: str, target: str, params: dict) -> str:
-    try:
-        async with websockets.connect(OPENCLAW_URL) as ws:
-            # Получаем challenge
-            challenge_msg = await asyncio.wait_for(ws.recv(), timeout=10)
-            challenge = json.loads(challenge_msg)
-            
-            if challenge.get("type") == "event" and challenge.get("event") == "connect.challenge":
-                nonce = challenge["payload"]["nonce"]
-                auth_response = json.dumps({
-                    "type": "auth.response",
-                    "payload": {"api_key": OPENCLAW_API_KEY, "nonce": nonce}
-                })
-                await ws.send(auth_response)
-            
-            # Отправляем команду
-            cmd = json.dumps({"url": params.get("url", "https://google.com")})
-            await ws.send(cmd)
-            response = await asyncio.wait_for(ws.recv(), timeout=30)
-            return f"✅ OpenClaw executed: {response}"
+            error_body = e.response.json()
+            error_detail = f"{error_detail}: {error_body.get('error', error_body)}"
+        except:
+            error_detail = f"{error_detail}: {e.response.text}"
+        logger.error(f"OpenClaw API error: {error_detail}")
+        return f"⚠️ OpenClaw error: {error_detail}"
     except Exception as e:
-        return f"⚠️ OpenClaw error: {str(e)}"
+        logger.exception(f"Unexpected error during OpenClaw invocation: {e}")
+        return f"⚠️ Unexpected error: {str(e)}"
 
-async def execute_action(action: str, target: str, params: dict) -> str:
-    await asyncio.sleep(0.2)
-    return await execute_with_openclaw(action, target, params)
-
-@app.post("/api/actions/execute", response_model=ActionResponse)
-async def execute(request: ActionRequest):
-    print(f"[REQUEST] {request.agent_id} → {request.action} on {request.target}")
-    
-    if request.requires_approval:
-        action_id = log_action(request, "pending_approval")
-        return ActionResponse(status="pending_approval", action_id=action_id, message="Awaiting approval")
-    
-    try:
-        result = await execute_action(request.action, request.target, request.params)
-        action_id = log_action(request, "executed", result)
-        return ActionResponse(status="executed", action_id=action_id, message=result)
-    except Exception as e:
-        action_id = log_action(request, "failed", str(e))
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/api/actions/audit")
-async def get_audit_log(limit: int = 50):
-    return {"logs": audit_log[-limit:]}
-
-@app.get("/api/actions/health")
-async def health_check():
-    return {"status": "ok", "audit_count": len(audit_log)}
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+# ... (остальной код)

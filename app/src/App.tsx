@@ -2,6 +2,10 @@ import { useState } from 'react';
 import Sidebar from '@/components/Sidebar';
 import Header from '@/components/Header';
 import Dashboard from '@/sections/Dashboard';
+import OfficeFloor from '@/sections/OfficeFloor';
+import PlanBoard from '@/sections/PlanBoard';
+import LiveFeed from '@/sections/LiveFeed';
+import Blackboard from '@/sections/Blackboard';
 import Agents from '@/sections/Agents';
 import Tasks from '@/sections/Tasks';
 import Ontology from '@/sections/Ontology';
@@ -12,6 +16,10 @@ import type { NavSection } from '@/components/Sidebar';
 
 const sectionMeta: Record<NavSection, { title: string; subtitle: string }> = {
   dashboard: { title: 'Dashboard', subtitle: 'Overview of agent activity and system health' },
+  floor: { title: 'Office Floor', subtitle: 'Взгляд через стекло: кто из агентов чем занят' },
+  plan: { title: 'Plan Board', subtitle: 'Цель проекта, декомпозиция и ход подзадач' },
+  feed: { title: 'Live Feed', subtitle: 'Хронология работы офиса: что и почему делает каждый агент' },
+  blackboard: { title: 'Blackboard', subtitle: 'Доска решений: контракты, принятые командой' },
   agents: { title: 'Agent Team', subtitle: 'Manage AI developer agents and their roles' },
   tasks: { title: 'Tasks', subtitle: 'Track and assign development tasks' },
   ontology: { title: 'Ontology', subtitle: 'Browse the software development ontology graph' },
@@ -28,6 +36,14 @@ export default function App() {
     switch (activeSection) {
       case 'dashboard':
         return <Dashboard />;
+      case 'floor':
+        return <OfficeFloor />;
+      case 'plan':
+        return <PlanBoard />;
+      case 'feed':
+        return <LiveFeed />;
+      case 'blackboard':
+        return <Blackboard />;
       case 'agents':
         return <Agents />;
       case 'tasks':

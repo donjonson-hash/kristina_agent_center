@@ -1,0 +1,754 @@
+diff --git a/app/src/App.tsx b/app/src/App.tsx
+index 2feb86a..dea41d8 100644
+--- a/app/src/App.tsx
++++ b/app/src/App.tsx
+@@ -2,6 +2,10 @@ import { useState } from 'react';
+ import Sidebar from '@/components/Sidebar';
+ import Header from '@/components/Header';
+ import Dashboard from '@/sections/Dashboard';
++import OfficeFloor from '@/sections/OfficeFloor';
++import PlanBoard from '@/sections/PlanBoard';
++import LiveFeed from '@/sections/LiveFeed';
++import Blackboard from '@/sections/Blackboard';
+ import Agents from '@/sections/Agents';
+ import Tasks from '@/sections/Tasks';
+ import Ontology from '@/sections/Ontology';
+@@ -12,6 +16,10 @@ import type { NavSection } from '@/components/Sidebar';
+ 
+ const sectionMeta: Record<NavSection, { title: string; subtitle: string }> = {
+   dashboard: { title: 'Dashboard', subtitle: 'Overview of agent activity and system health' },
++  floor: { title: 'Office Floor', subtitle: 'Взгляд через стекло: кто из агентов чем занят' },
++  plan: { title: 'Plan Board', subtitle: 'Цель проекта, декомпозиция и ход подзадач' },
++  feed: { title: 'Live Feed', subtitle: 'Хронология работы офиса: что и почему делает каждый агент' },
++  blackboard: { title: 'Blackboard', subtitle: 'Доска решений: контракты, принятые командой' },
+   agents: { title: 'Agent Team', subtitle: 'Manage AI developer agents and their roles' },
+   tasks: { title: 'Tasks', subtitle: 'Track and assign development tasks' },
+   ontology: { title: 'Ontology', subtitle: 'Browse the software development ontology graph' },
+@@ -28,6 +36,14 @@ export default function App() {
+     switch (activeSection) {
+       case 'dashboard':
+         return <Dashboard />;
++      case 'floor':
++        return <OfficeFloor />;
++      case 'plan':
++        return <PlanBoard />;
++      case 'feed':
++        return <LiveFeed />;
++      case 'blackboard':
++        return <Blackboard />;
+       case 'agents':
+         return <Agents />;
+       case 'tasks':
+diff --git a/app/src/components/Sidebar.tsx b/app/src/components/Sidebar.tsx
+index 69bd828..2582da6 100644
+--- a/app/src/components/Sidebar.tsx
++++ b/app/src/components/Sidebar.tsx
+@@ -9,10 +9,18 @@ import {
+   Settings,
+   ChevronLeft,
+   ChevronRight,
++  Eye,
++  KanbanSquare,
++  Radio,
++  StickyNote,
+ } from 'lucide-react';
+ 
+ export type NavSection =
+   | 'dashboard'
++  | 'floor'
++  | 'plan'
++  | 'feed'
++  | 'blackboard'
+   | 'agents'
+   | 'tasks'
+   | 'ontology'
+@@ -27,6 +35,10 @@ interface SidebarProps {
+ 
+ const navItems: { id: NavSection; label: string; icon: React.ElementType }[] = [
+   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
++  { id: 'floor', label: 'Office Floor', icon: Eye },
++  { id: 'plan', label: 'Plan Board', icon: KanbanSquare },
++  { id: 'feed', label: 'Live Feed', icon: Radio },
++  { id: 'blackboard', label: 'Blackboard', icon: StickyNote },
+   { id: 'agents', label: 'Agent Team', icon: Bot },
+   { id: 'tasks', label: 'Tasks', icon: ClipboardList },
+   { id: 'ontology', label: 'Ontology', icon: Network },
+diff --git a/app/src/hooks/useOfficeEvents.ts b/app/src/hooks/useOfficeEvents.ts
+new file mode 100644
+index 0000000..9f13b29
+--- /dev/null
++++ b/app/src/hooks/useOfficeEvents.ts
+@@ -0,0 +1,35 @@
++// Поллинг ленты событий офиса («стекло»): курсорная подгрузка раз в 2 секунды.
++// Один и тот же хук кормит Office Floor и Live Feed.
++import { useEffect, useRef, useState } from 'react';
++import { listEvents, type OfficeEvent } from '@/lib/api';
++
++const POLL_MS = 2000;
++const KEEP_LAST = 500;
++
++export function useOfficeEvents() {
++  const [events, setEvents] = useState<OfficeEvent[]>([]);
++  const [error, setError] = useState<string | null>(null);
++  const cursor = useRef(0);
++
++  useEffect(() => {
++    let alive = true;
++    const tick = async () => {
++      try {
++        const { events: fresh, last_id } = await listEvents(cursor.current);
++        if (!alive) return;
++        if (fresh.length) {
++          cursor.current = last_id;
++          setEvents((prev) => [...prev, ...fresh].slice(-KEEP_LAST));
++        }
++        setError(null);
++      } catch (e) {
++        if (alive) setError(e instanceof Error ? e.message : String(e));
++      }
++    };
++    tick();
++    const id = setInterval(tick, POLL_MS);
++    return () => { alive = false; clearInterval(id); };
++  }, []);
++
++  return { events, error };
++}
+diff --git a/app/src/lib/api.ts b/app/src/lib/api.ts
+new file mode 100644
+index 0000000..9c0fad3
+--- /dev/null
++++ b/app/src/lib/api.ts
+@@ -0,0 +1,175 @@
++// app/src/lib/api.ts
++// Клиент бэкенда офиса для командного центра. Базовые URL — под своё окружение.
++const OFFICE = import.meta.env.VITE_OFFICE_URL ?? 'http://localhost:8100';
++const GATEWAY = import.meta.env.VITE_GATEWAY_URL ?? 'http://localhost:8000';
++
++export interface AgentInfo {
++  name: string;
++  role: string;
++  allowed_actions: string[];
++}
++
++export interface ActionRecord {
++  id: string;
++  agent_id: string;
++  action: string;
++  target: string;
++  params: string;
++  tier: string;
++  status: string;
++  result: string | null;
++  provenance_hash: string;
++  created_at: number;
++  decided_at: number | null;
++  decided_by: string | null;
++}
++
++export interface TaskResult {
++  task_id: string;
++  task: string;
++  routed_to: string;
++  routing_reason: string;
++  result: {
++    agent: string;
++    action?: string;
++    reason?: string;
++    status?: string;
++    gateway?: { id: string; tier: string; status: string };
++  };
++}
++
++export interface TaskRecord {
++  id: string;
++  text: string;
++  routed_to: string | null;
++  action: string | null;
++  action_id: string | null;
++  tier: string | null;
++  status: string | null;
++  reason: string | null;
++  created_at: number;
++}
++
++async function json<T>(r: Response): Promise<T> {
++  if (!r.ok) {
++    const body = await r.json().catch(() => ({}));
++    throw new Error(body.detail ?? `HTTP ${r.status}`);
++  }
++  return r.json() as Promise<T>;
++}
++
++// ── Офис (диспетчер Kristina) ────────────────────────────────────────────────
++
++export const listAgents = () =>
++  fetch(`${OFFICE}/office/agents`).then((r) => json<{ agents: AgentInfo[] }>(r));
++
++export const submitTask = (task: string) =>
++  fetch(`${OFFICE}/office/task`, {
++    method: 'POST',
++    headers: { 'Content-Type': 'application/json' },
++    body: JSON.stringify({ task }),
++  }).then((r) => json<TaskResult>(r));
++
++export const listTasks = (limit = 50) =>
++  fetch(`${OFFICE}/office/tasks?limit=${limit}`).then((r) => json<{ tasks: TaskRecord[] }>(r));
++
++export interface OntologyObjectType { name: string; key: string; properties: string[]; }
++export interface OntologyActionType { name: string; target: string; tier: string; }
++export interface OntologyTier { requires_approval: boolean; description: string; }
++export interface Ontology {
++  object_types: OntologyObjectType[];
++  risk_tiers: Record<string, OntologyTier>;
++  action_types: OntologyActionType[];
++  agents: AgentInfo[];
++}
++
++export const getOntology = () =>
++  fetch(`${OFFICE}/office/ontology`).then((r) => json<Ontology>(r));
++
++// ── Шлюз (Action Service): очередь, провенанс, решения человека ──────────────
++
++export const listPending = () =>
++  fetch(`${GATEWAY}/actions/pending`).then((r) => json<{ pending: ActionRecord[] }>(r));
++
++export const listAudit = (limit = 50) =>
++  fetch(`${GATEWAY}/actions/audit?limit=${limit}`).then((r) => json<{ audit: ActionRecord[] }>(r));
++
++export const approve = (id: string, approver = 'human') =>
++  fetch(`${GATEWAY}/actions/${id}/approve?approver=${encodeURIComponent(approver)}`,
++    { method: 'POST' }).then((r) => json<ActionRecord>(r));
++
++export interface RunState {
++  id: string;
++  goal: string;
++  agent_id: string;
++  status: string;
++  history: { action: string; target: string; result: string; status: string }[];
++  pending_action_id: string | null;
++  steps: number;
++  summary: string | null;
++}
++
++// После одобрения действия — продолжить связанную задачу (если есть).
++export const continueByAction = (actionId: string) =>
++  fetch(`${OFFICE}/office/continue-by-action/${actionId}`, { method: 'POST' })
++    .then((r) => json<{ run: RunState | null }>(r));
++
++export const reject = (id: string, approver = 'human') =>
++  fetch(`${GATEWAY}/actions/${id}/reject?approver=${encodeURIComponent(approver)}`,
++    { method: 'POST' }).then((r) => json<ActionRecord>(r));
++
++// ── Стекло: события, проекты, доска (Этап 5) ─────────────────────────────────
++
++export interface OfficeEvent {
++  id: number;
++  ts: number;
++  kind: string;
++  agent: string | null;
++  run_id: string | null;
++  plan_id: string | null;
++  payload: Record<string, unknown>;
++}
++
++export const listEvents = (after = 0, limit = 200) =>
++  fetch(`${OFFICE}/office/events?after=${after}&limit=${limit}`)
++    .then((r) => json<{ events: OfficeEvent[]; last_id: number }>(r));
++
++export interface Subtask {
++  n: number;
++  agent: string;
++  title: string;
++  description: string;
++  acceptance: string;
++  depends_on: number[];
++  status: 'queued' | 'in_progress' | 'done' | 'failed';
++  run_id: string | null;
++}
++
++export interface Project {
++  id: string;
++  goal: string;
++  status: 'planned' | 'running' | 'done' | 'failed' | 'plan_failed';
++  subtasks: Subtask[];
++  summary: string | null;
++  created_at: number;
++}
++
++export type ProjectListItem = Omit<Project, 'subtasks'>;
++
++export const startProject = (goal: string) =>
++  fetch(`${OFFICE}/office/project`, {
++    method: 'POST',
++    headers: { 'Content-Type': 'application/json' },
++    body: JSON.stringify({ goal }),
++  }).then((r) => json<Project>(r));
++
++export const listProjects = () =>
++  fetch(`${OFFICE}/office/projects`).then((r) => json<{ projects: ProjectListItem[] }>(r));
++
++export const getProject = (id: string) =>
++  fetch(`${OFFICE}/office/project/${id}`).then((r) => json<Project>(r));
++
++export interface Note { id: number; ts: number; agent: string; text: string; }
++
++export const listNotes = () =>
++  fetch(`${OFFICE}/office/notes`).then((r) => json<{ notes: Note[] }>(r));
+diff --git a/app/src/sections/Blackboard.tsx b/app/src/sections/Blackboard.tsx
+new file mode 100644
+index 0000000..5031657
+--- /dev/null
++++ b/app/src/sections/Blackboard.tsx
+@@ -0,0 +1,47 @@
++// Blackboard — доска решений команды: контракты (API, стек, конвенции),
++// которые агенты опубликовали друг для друга через post_note.
++import { useEffect, useState } from 'react';
++import { StickyNote } from 'lucide-react';
++import { listNotes, type Note } from '@/lib/api';
++
++const POLL_MS = 3000;
++
++export default function Blackboard() {
++  const [notes, setNotes] = useState<Note[]>([]);
++  const [error, setError] = useState<string | null>(null);
++
++  useEffect(() => {
++    const tick = () =>
++      listNotes()
++        .then((r) => { setNotes(r.notes); setError(null); })
++        .catch((e) => setError(e instanceof Error ? e.message : String(e)));
++    tick();
++    const id = setInterval(tick, POLL_MS);
++    return () => clearInterval(id);
++  }, []);
++
++  return (
++    <div className="p-6">
++      {error && <p className="text-xs text-amber-600 mb-3">доска недоступна: {error}</p>}
++      {notes.length === 0 && !error && (
++        <p className="text-sm text-slate-400">
++          Доска пуста. Агенты публикуют сюда контрактные решения по ходу проекта.
++        </p>
++      )}
++      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
++        {notes.map((n) => (
++          <div key={n.id} className="bg-amber-50/70 border border-amber-200 rounded-xl p-4">
++            <div className="flex items-center gap-2 mb-2 text-amber-700">
++              <StickyNote size={14} />
++              <span className="text-xs font-semibold capitalize">{n.agent}</span>
++              <span className="text-[11px] text-amber-600/70 ml-auto">
++                {new Date(n.ts * 1000).toLocaleTimeString('ru-RU')}
++              </span>
++            </div>
++            <p className="text-sm text-slate-700 whitespace-pre-wrap break-words">{n.text}</p>
++          </div>
++        ))}
++      </div>
++    </div>
++  );
++}
+diff --git a/app/src/sections/LiveFeed.tsx b/app/src/sections/LiveFeed.tsx
+new file mode 100644
+index 0000000..1d45f00
+--- /dev/null
++++ b/app/src/sections/LiveFeed.tsx
+@@ -0,0 +1,108 @@
++// Live Feed — хронология работы офиса: каждое событие на человеческом языке,
++// с тем самым «почему» из решения агента. Это главный экран «стекла».
++import { useEffect, useRef } from 'react';
++import {
++  ClipboardList, Play, CheckCircle2, XCircle, FileCog, StickyNote,
++  ShieldCheck, ShieldAlert, Wrench, Flag, AlertTriangle, CircleDot,
++} from 'lucide-react';
++import type { OfficeEvent } from '@/lib/api';
++import { useOfficeEvents } from '@/hooks/useOfficeEvents';
++
++interface Rendered { icon: React.ElementType; cls: string; text: string }
++
++function render(e: OfficeEvent): Rendered {
++  const p = e.payload as Record<string, string | number | undefined>;
++  const who = e.agent ?? 'офис';
++  switch (e.kind) {
++    case 'plan_created':
++      return { icon: ClipboardList, cls: 'text-sky-600',
++        text: `kristina составила план: «${p.goal}»` };
++    case 'plan_failed':
++      return { icon: AlertTriangle, cls: 'text-red-600',
++        text: `kristina не смогла составить план: ${p.detail}` };
++    case 'task_routed':
++      return { icon: Play, cls: 'text-sky-600',
++        text: `kristina → ${p.routed_to}: «${p.task}» (${p.reason})` };
++    case 'subtask_started':
++      return { icon: CircleDot, cls: 'text-sky-600',
++        text: `${who} взял подзадачу #${p.n} «${p.title}»` };
++    case 'subtask_done':
++      return { icon: CheckCircle2, cls: 'text-emerald-600',
++        text: `${who} завершил подзадачу #${p.n} «${p.title}»: ${p.summary ?? ''}` };
++    case 'subtask_failed':
++      return { icon: XCircle, cls: 'text-red-600',
++        text: `${who} провалил подзадачу #${p.n} «${p.title}»: ${p.detail ?? ''}` };
++    case 'run_started':
++      return { icon: Play, cls: 'text-slate-500', text: `${who} начал прогон: ${p.goal}` };
++    case 'run_done':
++      return { icon: CheckCircle2, cls: 'text-emerald-600',
++        text: `${who} закончил (${p.steps} шагов): ${p.summary ?? ''}` };
++    case 'run_failed':
++      return { icon: XCircle, cls: 'text-red-600', text: `${who}: прогон провален — ${p.detail}` };
++    case 'run_stopped':
++      return { icon: AlertTriangle, cls: 'text-amber-600', text: `${who}: ${p.detail}` };
++    case 'action_executed':
++      return e.payload.action === 'post_note'
++        ? { icon: StickyNote, cls: 'text-violet-600', text: `${who} опубликовал контракт на доске` }
++        : { icon: FileCog, cls: 'text-slate-600',
++            text: `${who}: ${p.action}(${p.target ?? ''})${p.reason ? ` — ${p.reason}` : ''}` };
++    case 'action_failed':
++      return { icon: XCircle, cls: 'text-red-600',
++        text: `${who}: ${p.action} упал — ${p.error}` };
++    case 'action_rejected':
++      return { icon: ShieldAlert, cls: 'text-amber-600',
++        text: `шлюз отказал ${who}: ${p.action} (${p.detail})` };
++    case 'verify_started':
++      return { icon: ShieldCheck, cls: 'text-sky-600', text: 'ingrid запускает самопроверку (tests + lint)' };
++    case 'verify_passed':
++      return { icon: ShieldCheck, cls: 'text-emerald-600', text: 'самопроверка зелёная' };
++    case 'verify_failed':
++      return { icon: ShieldAlert, cls: 'text-red-600', text: `самопроверка провалена: ${p.report}` };
++    case 'fix_iteration':
++      return { icon: Wrench, cls: 'text-amber-600',
++        text: `${who} чинит (итерация ${p.n} из ${p.of})` };
++    case 'project_done':
++      return { icon: Flag, cls: 'text-emerald-600', text: `ПРОЕКТ ЗАВЕРШЁН: ${p.summary}` };
++    case 'project_failed':
++      return { icon: Flag, cls: 'text-red-600', text: `ПРОЕКТ ПРОВАЛЕН: ${p.detail}` };
++    default:
++      return { icon: CircleDot, cls: 'text-slate-400', text: `${who}: ${e.kind}` };
++  }
++}
++
++export default function LiveFeed() {
++  const { events, error } = useOfficeEvents();
++  const bottom = useRef<HTMLDivElement>(null);
++
++  useEffect(() => {
++    bottom.current?.scrollIntoView({ behavior: 'smooth' });
++  }, [events.length]);
++
++  return (
++    <div className="p-6">
++      {error && <p className="text-xs text-amber-600 mb-3">лента недоступна: {error}</p>}
++      <div className="bg-white rounded-xl border border-slate-200 divide-y divide-slate-100 max-h-[calc(100vh-180px)] overflow-y-auto">
++        {events.length === 0 && (
++          <p className="p-6 text-sm text-slate-400">Событий пока нет — офис тих.</p>
++        )}
++        {events.map((e) => {
++          const r = render(e);
++          const Icon = r.icon;
++          return (
++            <div key={e.id} className="flex items-start gap-3 px-4 py-2.5">
++              <Icon size={15} className={`mt-0.5 shrink-0 ${r.cls}`} />
++              <div className="min-w-0">
++                <p className="text-sm text-slate-700 break-words">{r.text}</p>
++                <p className="text-[11px] text-slate-400">
++                  {new Date(e.ts * 1000).toLocaleTimeString('ru-RU')}
++                  {e.run_id && <span className="font-mono"> · run {e.run_id}</span>}
++                </p>
++              </div>
++            </div>
++          );
++        })}
++        <div ref={bottom} />
++      </div>
++    </div>
++  );
++}
+diff --git a/app/src/sections/OfficeFloor.tsx b/app/src/sections/OfficeFloor.tsx
+new file mode 100644
+index 0000000..e8aa79f
+--- /dev/null
++++ b/app/src/sections/OfficeFloor.tsx
+@@ -0,0 +1,124 @@
++// Office Floor — «взгляд через стекло»: карточки агентов с живым статусом.
++// Статус выводится из ленты событий: run_started без закрывающего события
++// означает «работает», последнее action_executed — «что делает и почему».
++import { useEffect, useMemo, useState } from 'react';
++import { Bot, Loader2, Coffee, AlertCircle } from 'lucide-react';
++import { listAgents, type AgentInfo, type OfficeEvent } from '@/lib/api';
++import { useOfficeEvents } from '@/hooks/useOfficeEvents';
++
++interface AgentLive {
++  busy: boolean;
++  goal: string;
++  lastAction: string;
++  lastReason: string;
++  lastTs: number | null;
++}
++
++const CLOSERS = new Set(['run_done', 'run_failed', 'run_stopped']);
++
++function deriveLive(events: OfficeEvent[], agent: string): AgentLive {
++  const live: AgentLive = { busy: false, goal: '', lastAction: '', lastReason: '', lastTs: null };
++  const openRuns = new Set<string>();
++  for (const e of events) {
++    if (e.agent !== agent) continue;
++    live.lastTs = e.ts;
++    if (e.kind === 'run_started' && e.run_id) {
++      openRuns.add(e.run_id);
++      live.goal = String(e.payload.goal ?? '');
++    }
++    if (CLOSERS.has(e.kind) && e.run_id) openRuns.delete(e.run_id);
++    if (e.kind === 'action_executed' || e.kind === 'action_failed') {
++      live.lastAction = `${e.payload.action ?? ''}${e.kind === 'action_failed' ? ' ⚠' : ''}`;
++      live.lastReason = String(e.payload.reason ?? '');
++    }
++    if (e.kind === 'task_routed') {
++      live.lastAction = 'раздаёт задачу';
++      live.lastReason = `→ ${e.payload.routed_to}: ${e.payload.reason ?? ''}`;
++    }
++    if (e.kind === 'plan_created') {
++      live.lastAction = 'составила план';
++      live.lastReason = `${(e.payload.subtasks as unknown[] | undefined)?.length ?? '?'} подзадач`;
++    }
++  }
++  live.busy = openRuns.size > 0;
++  return live;
++}
++
++export default function OfficeFloor() {
++  const [agents, setAgents] = useState<AgentInfo[]>([]);
++  const [loadError, setLoadError] = useState<string | null>(null);
++  const { events, error } = useOfficeEvents();
++
++  useEffect(() => {
++    listAgents()
++      .then((r) => setAgents(r.agents))
++      .catch((e) => setLoadError(e instanceof Error ? e.message : String(e)));
++  }, []);
++
++  const liveByAgent = useMemo(() => {
++    const out: Record<string, AgentLive> = {};
++    for (const a of agents) out[a.name] = deriveLive(events, a.name);
++    return out;
++  }, [agents, events]);
++
++  if (loadError) {
++    return (
++      <div className="p-6 flex items-center gap-2 text-red-600">
++        <AlertCircle size={18} /> Офис недоступен: {loadError}
++      </div>
++    );
++  }
++
++  return (
++    <div className="p-6 space-y-4">
++      {error && (
++        <p className="text-xs text-amber-600">лента событий недоступна: {error}</p>
++      )}
++      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
++        {agents.map((a) => {
++          const live = liveByAgent[a.name] ?? {
++            busy: false, goal: '', lastAction: '', lastReason: '', lastTs: null,
++          };
++          return (
++            <div key={a.name} className="bg-white rounded-xl border border-slate-200 p-5">
++              <div className="flex items-center justify-between mb-3">
++                <div className="flex items-center gap-3">
++                  <div className={`p-2 rounded-lg ${live.busy ? 'bg-sky-50 text-sky-600' : 'bg-slate-100 text-slate-500'}`}>
++                    <Bot size={20} />
++                  </div>
++                  <div>
++                    <p className="font-semibold text-[#1A2F3D] capitalize">{a.name}</p>
++                    <p className="text-xs text-slate-500">{a.role}</p>
++                  </div>
++                </div>
++                {live.busy ? (
++                  <span className="inline-flex items-center gap-1.5 text-xs font-medium text-sky-600 bg-sky-50 px-2.5 py-1 rounded-full">
++                    <Loader2 size={12} className="animate-spin" /> работает
++                  </span>
++                ) : (
++                  <span className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 bg-slate-100 px-2.5 py-1 rounded-full">
++                    <Coffee size={12} /> свободен
++                  </span>
++                )}
++              </div>
++
++              {live.busy && live.goal && (
++                <p className="text-xs text-slate-600 bg-slate-50 rounded-lg p-2.5 mb-2 line-clamp-3">
++                  {live.goal}
++                </p>
++              )}
++              {live.lastAction ? (
++                <div className="text-xs text-slate-500">
++                  <span className="font-mono text-slate-700">{live.lastAction}</span>
++                  {live.lastReason && <span> — {live.lastReason}</span>}
++                </div>
++              ) : (
++                <p className="text-xs text-slate-400">пока без активности</p>
++              )}
++            </div>
++          );
++        })}
++      </div>
++    </div>
++  );
++}
+diff --git a/app/src/sections/PlanBoard.tsx b/app/src/sections/PlanBoard.tsx
+new file mode 100644
+index 0000000..42ea9cf
+--- /dev/null
++++ b/app/src/sections/PlanBoard.tsx
+@@ -0,0 +1,154 @@
++// Plan Board — цель проекта и канбан подзадач: видно, как Kristina
++// декомпозировала задачу, кому раздала и в каком состоянии каждая часть.
++import { useCallback, useEffect, useState } from 'react';
++import {
++  Send, Loader2, CheckCircle2, XCircle, Clock, GitBranch, ArrowRight,
++} from 'lucide-react';
++import {
++  startProject, listProjects, getProject,
++  type Project, type Subtask,
++} from '@/lib/api';
++
++const POLL_MS = 2000;
++
++const subtaskStyle: Record<Subtask['status'], { icon: React.ElementType; cls: string; label: string }> = {
++  queued:      { icon: Clock,        cls: 'text-slate-500 bg-slate-50 border-slate-200', label: 'в очереди' },
++  in_progress: { icon: Loader2,      cls: 'text-sky-600 bg-sky-50 border-sky-200',       label: 'в работе' },
++  done:        { icon: CheckCircle2, cls: 'text-emerald-600 bg-emerald-50 border-emerald-200', label: 'готово' },
++  failed:      { icon: XCircle,      cls: 'text-red-600 bg-red-50 border-red-200',       label: 'провал' },
++};
++
++const projectBadge: Record<Project['status'], string> = {
++  planned: 'bg-slate-100 text-slate-600',
++  running: 'bg-sky-50 text-sky-600',
++  done: 'bg-emerald-50 text-emerald-600',
++  failed: 'bg-red-50 text-red-600',
++  plan_failed: 'bg-red-50 text-red-600',
++};
++
++export default function PlanBoard() {
++  const [goal, setGoal] = useState('');
++  const [submitting, setSubmitting] = useState(false);
++  const [project, setProject] = useState<Project | null>(null);
++  const [error, setError] = useState<string | null>(null);
++
++  const refresh = useCallback(async () => {
++    try {
++      if (project?.id) {
++        setProject(await getProject(project.id));
++      } else {
++        const { projects } = await listProjects();
++        if (projects.length) setProject(await getProject(projects[0].id));
++      }
++      setError(null);
++    } catch (e) {
++      setError(e instanceof Error ? e.message : String(e));
++    }
++  }, [project?.id]);
++
++  useEffect(() => {
++    refresh();
++    const id = setInterval(refresh, POLL_MS);
++    return () => clearInterval(id);
++  }, [refresh]);
++
++  const submit = async () => {
++    const text = goal.trim();
++    if (!text || submitting) return;
++    setSubmitting(true);
++    setError(null);
++    try {
++      const p = await startProject(text);
++      setProject(p);
++      setGoal('');
++    } catch (e) {
++      setError(e instanceof Error ? e.message : String(e));
++    } finally {
++      setSubmitting(false);
++    }
++  };
++
++  return (
++    <div className="p-6 space-y-6">
++      {/* Постановка цели: единственная точка входа человека */}
++      <div className="bg-white rounded-xl border border-slate-200 p-5">
++        <p className="text-sm font-semibold text-[#1A2F3D] mb-3">
++          Поставить цель проекта
++        </p>
++        <div className="flex gap-2">
++          <textarea
++            value={goal}
++            onChange={(e) => setGoal(e.target.value)}
++            placeholder="Например: создай мини-приложение с ИИ-агентом для исследования эзотерических тем…"
++            rows={2}
++            className="flex-1 text-sm border border-slate-200 rounded-lg p-3 resize-none focus:outline-none focus:ring-2 focus:ring-sky-200"
++          />
++          <button
++            onClick={submit}
++            disabled={submitting || !goal.trim()}
++            className="px-4 rounded-lg bg-[#2E4A62] text-white text-sm font-medium disabled:opacity-50 inline-flex items-center gap-2"
++          >
++            {submitting ? <Loader2 size={16} className="animate-spin" /> : <Send size={16} />}
++            В работу
++          </button>
++        </div>
++        {error && <p className="text-xs text-red-600 mt-2">{error}</p>}
++      </div>
++
++      {/* Текущий / последний проект */}
++      {project && (
++        <div className="bg-white rounded-xl border border-slate-200 p-5 space-y-4">
++          <div className="flex items-start justify-between gap-4">
++            <div>
++              <p className="text-sm font-semibold text-[#1A2F3D]">{project.goal}</p>
++              {project.summary && (
++                <p className="text-xs text-slate-500 mt-1">{project.summary}</p>
++              )}
++            </div>
++            <span className={`text-xs font-medium px-2.5 py-1 rounded-full whitespace-nowrap ${projectBadge[project.status]}`}>
++              {project.status}
++            </span>
++          </div>
++
++          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
++            {project.subtasks.map((st) => {
++              const s = subtaskStyle[st.status];
++              const Icon = s.icon;
++              return (
++                <div key={st.n} className={`rounded-lg border p-4 ${s.cls}`}>
++                  <div className="flex items-center justify-between mb-2">
++                    <span className="text-xs font-mono">#{st.n}</span>
++                    <span className="inline-flex items-center gap-1 text-xs font-medium">
++                      <Icon size={12} className={st.status === 'in_progress' ? 'animate-spin' : ''} />
++                      {s.label}
++                    </span>
++                  </div>
++                  <p className="text-sm font-medium text-[#1A2F3D] mb-1">{st.title}</p>
++                  <p className="text-xs text-slate-600 line-clamp-3 mb-2">{st.description}</p>
++                  <div className="flex items-center justify-between text-xs text-slate-500">
++                    <span className="inline-flex items-center gap-1">
++                      <ArrowRight size={11} /> {st.agent}
++                    </span>
++                    {st.depends_on.length > 0 && (
++                      <span className="inline-flex items-center gap-1">
++                        <GitBranch size={11} /> после #{st.depends_on.join(', #')}
++                      </span>
++                    )}
++                  </div>
++                  {st.acceptance && (
++                    <p className="text-[11px] text-slate-500 mt-2 border-t border-slate-200/60 pt-2">
++                      Критерий: {st.acceptance}
++                    </p>
++                  )}
++                </div>
++              );
++            })}
++          </div>
++        </div>
++      )}
++      {!project && !error && (
++        <p className="text-sm text-slate-400">Проектов пока нет — поставь первую цель.</p>
++      )}
++    </div>
++  );
++}

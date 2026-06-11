@@ -9,10 +9,18 @@ import {
   Settings,
   ChevronLeft,
   ChevronRight,
+  Eye,
+  KanbanSquare,
+  Radio,
+  StickyNote,
 } from 'lucide-react';
 
 export type NavSection =
   | 'dashboard'
+  | 'floor'
+  | 'plan'
+  | 'feed'
+  | 'blackboard'
   | 'agents'
   | 'tasks'
   | 'ontology'
@@ -27,6 +35,10 @@ interface SidebarProps {
 
 const navItems: { id: NavSection; label: string; icon: React.ElementType }[] = [
   { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+  { id: 'floor', label: 'Office Floor', icon: Eye },
+  { id: 'plan', label: 'Plan Board', icon: KanbanSquare },
+  { id: 'feed', label: 'Live Feed', icon: Radio },
+  { id: 'blackboard', label: 'Blackboard', icon: StickyNote },
   { id: 'agents', label: 'Agent Team', icon: Bot },
   { id: 'tasks', label: 'Tasks', icon: ClipboardList },
   { id: 'ontology', label: 'Ontology', icon: Network },
