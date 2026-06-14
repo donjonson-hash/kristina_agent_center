@@ -58,6 +58,24 @@ function render(e: OfficeEvent): Rendered {
       return { icon: ShieldCheck, cls: 'text-emerald-600', text: 'самопроверка зелёная' };
     case 'verify_failed':
       return { icon: ShieldAlert, cls: 'text-red-600', text: `самопроверка провалена: ${p.report}` };
+    case 'review_started':
+      return { icon: ShieldCheck, cls: 'text-sky-600', text: 'viktor проводит code review изменений' };
+    case 'review_passed':
+      return { icon: ShieldCheck, cls: 'text-emerald-600',
+        text: `code review пройден${p.advisory ? ` (замечаний-советов: ${p.advisory})` : ''}` };
+    case 'review_note':
+      return { icon: StickyNote, cls: 'text-amber-600',
+        text: `viktor [${p.severity}] ${p.file}: ${p.problem}` };
+    case 'review_failed':
+      return { icon: ShieldAlert, cls: 'text-red-600',
+        text: `viktor завернул работу: критические дефекты (${(p.criticals as unknown[] | undefined)?.length ?? '?'})` };
+    case 'review_skipped':
+      return { icon: CircleDot, cls: 'text-slate-400', text: `ревью пропущено: ${p.detail}` };
+    case 'diagnose_started':
+      return { icon: Wrench, cls: 'text-amber-600', text: 'viktor разбирает причину провала' };
+    case 'diagnosis':
+      return { icon: ShieldAlert, cls: 'text-amber-700',
+        text: `ДИАГНОЗ viktor: ${p.diagnosis}${(p.fixes as unknown[] | undefined)?.length ? ` → как чинить: ${(p.fixes as string[]).join('; ')}` : ''}` };
     case 'fix_iteration':
       return { icon: Wrench, cls: 'text-amber-600',
         text: `${who} чинит (итерация ${p.n} из ${p.of})` };
