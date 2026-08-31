@@ -16,7 +16,7 @@ load_dotenv()
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-OPENCLAW_API_KEY = os.getenv("OPENCLAW_API_KEY", "sk-295ca99ac1e74ad7a8db90d4e84a1145")
+OPENCLAW_API_KEY = os.getenv("OPENCLAW_API_KEY")
 SSH_HOST = os.getenv("SSH_HOST", "195.245.112.66")
 SSH_USER = os.getenv("SSH_USER", "root")
 SSH_PORT = os.getenv("SSH_PORT", "3333")
