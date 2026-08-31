@@ -23,8 +23,8 @@ jobs:
     
     - name: Run flake8
       continue-on-error: true
-      run: flake8 action_service.py --max-line-length=120 --ignore=E501,W503,E302
+      run: flake8 action_service.py decision_gate.py --max-line-length=120 --ignore=E501,W503,E302
     
     - name: Run bandit (security)
       continue-on-error: true
-      run: bandit action_service.py -ll -s B311
+      run: bandit action_service.py decision_gate.py -ll -s B311
