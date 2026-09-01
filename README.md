@@ -17,29 +17,27 @@ python action_service.py &
 cd app
 npm install
 npm run dev
+
 # Test Action Service
 curl http://localhost:8000/api/actions/health
+```
 
-# Test execute endpoint
-curl -X POST http://localhost:8000/api/actions/execute \
-  -H "Content-Type: application/json" \
-  -d '{"action":"test","target":"Test","agent_id":"devops","requires_approval":false}'
- CI/CD Status
-Workflow	Status
-Test Action Service	https://github.com/donjonson-hash/kristina_agent_center/actions/workflows/test-action-service.yml/badge.svg
-Lint Python	https://github.com/donjonson-hash/kristina_agent_center/actions/workflows/lint-python.yml/badge.svg
-Validate Ontology	https://github.com/donjonson-hash/kristina_agent_center/actions/workflows/validate-ontology.yml/badge.svg
-🏗️ Architecture
-    Action Service - Palantir-style gateway (FastAPI)
+Deploy actions use the evidence-gated proposal and approval flow. See [Action Service Decision Gate](docs/ACTION_SERVICE_DECISION_GATE.md) for request examples.
 
-    Frontend - React/TypeScript dashboard
+## CI/CD Status
 
-    Ontology - YAML-based entity definitions
+- [Test Action Service](https://github.com/donjonson-hash/kristina_agent_center/actions/workflows/test-action-service.yml)
+- [Lint Python](https://github.com/donjonson-hash/kristina_agent_center/actions/workflows/lint-python.yml)
+- [Validate Ontology](https://github.com/donjonson-hash/kristina_agent_center/actions/workflows/validate-ontology.yml)
 
-    Audit Log - Immutable action logging
+## 🏗️ Architecture
 
-    OpenClaw - Browser automation integration
+- Action Service - Palantir-style gateway (FastAPI)
+- Frontend - React/TypeScript dashboard
+- Ontology - YAML-based entity definitions
+- Audit log - immutable in-memory action logging for the current MVP stage
+- OpenClaw - browser automation integration
 
-📝 License
+## 📝 License
 
 MIT

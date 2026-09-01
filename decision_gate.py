@@ -125,15 +125,6 @@ def _decision(
 
 
 def evaluate_action(action: ProposedAction, snapshot: EvidenceSnapshot) -> Decision:
-    if not snapshot.available:
-        return _decision(
-            action,
-            snapshot,
-            Verdict.DEFERRED,
-            "evidence_unavailable",
-            snapshot.error or "Evidence collection is unavailable.",
-        )
-
     if action.action != "deploy":
         return _decision(
             action,
@@ -141,6 +132,16 @@ def evaluate_action(action: ProposedAction, snapshot: EvidenceSnapshot) -> Decis
             Verdict.BLOCKED,
             "unsupported_action",
             f"Action '{action.action}' is outside the MVP policy.",
+        )
+
+    repository_parts = action.target.split("/")
+    if len(repository_parts) != 2 or not all(part.strip() for part in repository_parts):
+        return _decision(
+            action,
+            snapshot,
+            Verdict.NEEDS_CLARIFICATION,
+            "repository_missing",
+            "A deploy action requires a repository in 'owner/name' format.",
         )
 
     commit_sha = action.params.get("commit_sha")
@@ -151,6 +152,34 @@ def evaluate_action(action: ProposedAction, snapshot: EvidenceSnapshot) -> Decis
             Verdict.NEEDS_CLARIFICATION,
             "commit_sha_missing",
             "A deploy action requires an explicit commit SHA.",
+        )
+
+    branch = action.params.get("branch")
+    if not isinstance(branch, str) or not branch.strip():
+        return _decision(
+            action,
+            snapshot,
+            Verdict.NEEDS_CLARIFICATION,
+            "branch_missing",
+            "A deploy action requires an explicit branch.",
+        )
+
+    if not action.requires_approval:
+        return _decision(
+            action,
+            snapshot,
+            Verdict.BLOCKED,
+            "approval_policy_required",
+            "Deploy actions require human approval before execution.",
+        )
+
+    if not snapshot.available:
+        return _decision(
+            action,
+            snapshot,
+            Verdict.DEFERRED,
+            "evidence_unavailable",
+            snapshot.error or "Evidence collection is unavailable.",
         )
 
     if not snapshot.claims:

@@ -17,7 +17,11 @@ def action() -> ProposedAction:
         action="deploy",
         target=REPOSITORY,
         agent_id="kristina",
-        params={"commit_sha": COMMIT_SHA, "environment": "staging"},
+        params={
+            "branch": "main",
+            "commit_sha": COMMIT_SHA,
+            "environment": "staging",
+        },
         requires_approval=True,
     )
 

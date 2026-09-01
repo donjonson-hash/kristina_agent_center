@@ -23,7 +23,11 @@ def deploy_action(**changes) -> ProposedAction:
         "action": "deploy",
         "target": REPOSITORY,
         "agent_id": "kristina",
-        "params": {"commit_sha": COMMIT_SHA, "environment": "staging"},
+        "params": {
+            "branch": "main",
+            "commit_sha": COMMIT_SHA,
+            "environment": "staging",
+        },
         "requires_approval": True,
     }
     values.update(changes)
@@ -108,6 +112,16 @@ def test_matching_head_and_successful_ci_pass() -> None:
     assert decision.evidence_refs == ("head", "ci")
 
 
+def test_deploy_without_approval_policy_is_blocked() -> None:
+    decision = evaluate_action(
+        deploy_action(requires_approval=False),
+        valid_snapshot(),
+    )
+
+    assert decision.verdict is Verdict.BLOCKED
+    assert decision.reason_code == "approval_policy_required"
+
+
 def test_contradictory_claims_block_action() -> None:
     evidence = snapshot(
         claim("head-a", REPOSITORY, "repository.head_sha", COMMIT_SHA),
@@ -143,7 +157,11 @@ def test_changed_action_invalidates_decision() -> None:
     action = deploy_action()
     decision = evaluate_action(action, valid_snapshot())
     changed_action = deploy_action(
-        params={"commit_sha": COMMIT_SHA, "environment": "production"}
+        params={
+            "branch": "main",
+            "commit_sha": COMMIT_SHA,
+            "environment": "production",
+        }
     )
     registry = PermitRegistry()
 
